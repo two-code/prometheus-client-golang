@@ -261,7 +261,35 @@ const bucketLabel = "le"
 // tailored to broadly measure the response time (in seconds) of a network
 // service. Most likely, however, you will be required to define buckets
 // customized to your use case.
-var DefBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}
+var (
+	DefBuckets = []float64{
+		.003,
+		.005,
+		.01,
+		.017,
+		.025,
+		.037,
+		.05,
+		.063,
+		.075,
+		.1,
+		.137,
+		.175,
+		.25,
+		.375,
+		.5,
+		.75,
+		.875,
+		1,
+		1.25,
+		1.5,
+		2.0,
+		2.5,
+		3.75,
+		5,
+		10,
+	}
+)
 
 // DefNativeHistogramZeroThreshold is the default value for
 // NativeHistogramZeroThreshold in the HistogramOpts.
