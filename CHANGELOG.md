@@ -1,5 +1,26 @@
 ## Unreleased
 
+## 1.19.0 / 2023-02-27
+
+The module `prometheus/common v0.48.0` introduced an incompatibility when used together with client_golang (See https://github.com/prometheus/client_golang/pull/1448 for more details). If your project uses client_golang and you want to use `prometheus/common v0.48.0` or higher, please update client_golang to v1.19.0.
+
+* [CHANGE] Minimum required go version is now 1.20 (we also test client_golang against new 1.22 version). #1445 #1449
+* [FEATURE] collectors: Add version collector. #1422 #1427
+
+## 1.18.0 / 2023-12-22
+
+* [FEATURE] promlint: Allow creation of custom metric validations. #1311
+* [FEATURE] Go programs using client_golang can be built in wasip1 OS. #1350
+* [BUGFIX] histograms: Add timer to reset ASAP after bucket limiting has happened. #1367
+* [BUGFIX] testutil: Fix comparison of metrics with empty Help strings. #1378
+* [ENHANCEMENT] Improved performance of `MetricVec.WithLabelValues(...)`. #1360
+
+## 1.17.0 / 2023-09-27
+
+* [CHANGE] Minimum required go version is now 1.19 (we also test client_golang against new 1.21 version). #1325
+* [FEATURE] Add support for Created Timestamps in Counters, Summaries and Historams. #1313
+* [ENHANCEMENT] Enable detection of a native histogram without observations. #1314
+
 ## 1.16.0 / 2023-06-15
 
 * [BUGFIX] api: Switch to POST for LabelNames, Series, and QueryExemplars. #1252
@@ -295,7 +316,7 @@ _This release removes all previously deprecated features, resulting in the break
 * [BUGFIX] Fixed goroutine leaks. #236 #472
 * [BUGFIX] Fixed an error message for exponential histogram buckets. #467
 * [BUGFIX] Fixed data race writing to the metric map. #401
-* [BUGFIX] API client: Decode JSON on a 4xx respons but do not on 204
+* [BUGFIX] API client: Decode JSON on a 4xx response but do not on 204
   responses. #476 #414
 
 ## 0.8.0 / 2016-08-17

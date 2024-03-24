@@ -10,13 +10,14 @@ This is the [Go](http://golang.org) client library for
 instrumenting application code, and one for creating clients that talk to the
 Prometheus HTTP API.
 
-__This library requires Go1.18 or later.__
+**This library requires Go1.20 or later.**
+> The library mandates the use of Go1.20 or subsequent versions. While it has demonstrated functionality with versions as old as Go 1.17, our commitment remains to offer support and rectifications for only the most recent three major releases.
 
 ## Important note about releases and stability
 
 This repository generally follows [Semantic
 Versioning](https://semver.org/). However, the API client in
-prometheus/client_golang/api/… is still considered experimental. Breaking
+`prometheus/client_golang/api/…` is still considered experimental. Breaking
 changes of the API client will _not_ trigger a new major release. The same is
 true for selected other new features explicitly marked as **EXPERIMENTAL** in
 CHANGELOG.md.
@@ -83,7 +84,7 @@ To cut a minor version:
 7. Announce on the prometheus-announce mailing list, slack and Twitter.
 8. Merge the release branch back to the `main` using the "merge without squashing" approach (!).
 
-> NOTE: In case of merge conflicts, you can checkout the release branch in a new branch, e.g. <yourname>/resolve-conflicts`, fix the merge problems there, and then do a PR into main from the new branch. In that way, you still get all the commits in the release branch back into `main`, but leave the release branch alone.
+> NOTE: In case of merge conflicts, you can checkout the release branch in a new branch, e.g. `<yourname>/resolve-conflicts`, fix the merge problems there, and then do a PR into main from the new branch. In that way, you still get all the commits in the release branch back into `main`, but leave the release branch alone.
 
 To cut the patch version:
 

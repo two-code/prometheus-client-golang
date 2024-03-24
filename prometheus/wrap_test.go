@@ -15,11 +15,12 @@ package prometheus
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	dto "github.com/prometheus/client_model/go"
+	"google.golang.org/protobuf/proto"
 )
 
 // uncheckedCollector wraps a Collector but its Describe method yields no Desc.
@@ -43,9 +44,12 @@ func toMetricFamilies(cs ...Collector) []*dto.MetricFamily {
 }
 
 func TestWrap(t *testing.T) {
+	now := time.Now()
+	nowFn := func() time.Time { return now }
 	simpleCnt := NewCounter(CounterOpts{
 		Name: "simpleCnt",
 		Help: "helpSimpleCnt",
+		now:  nowFn,
 	})
 	simpleCnt.Inc()
 
@@ -58,6 +62,7 @@ func TestWrap(t *testing.T) {
 	preCnt := NewCounter(CounterOpts{
 		Name: "pre_simpleCnt",
 		Help: "helpSimpleCnt",
+		now:  nowFn,
 	})
 	preCnt.Inc()
 
@@ -65,6 +70,7 @@ func TestWrap(t *testing.T) {
 		Name:        "simpleCnt",
 		Help:        "helpSimpleCnt",
 		ConstLabels: Labels{"foo": "bar"},
+		now:         nowFn,
 	})
 	barLabeledCnt.Inc()
 
@@ -72,6 +78,7 @@ func TestWrap(t *testing.T) {
 		Name:        "simpleCnt",
 		Help:        "helpSimpleCnt",
 		ConstLabels: Labels{"foo": "baz"},
+		now:         nowFn,
 	})
 	bazLabeledCnt.Inc()
 
@@ -79,6 +86,7 @@ func TestWrap(t *testing.T) {
 		Name:        "pre_simpleCnt",
 		Help:        "helpSimpleCnt",
 		ConstLabels: Labels{"foo": "bar"},
+		now:         nowFn,
 	})
 	labeledPreCnt.Inc()
 
@@ -86,6 +94,7 @@ func TestWrap(t *testing.T) {
 		Name:        "pre_simpleCnt",
 		Help:        "helpSimpleCnt",
 		ConstLabels: Labels{"foo": "bar", "dings": "bums"},
+		now:         nowFn,
 	})
 	twiceLabeledPreCnt.Inc()
 
@@ -297,21 +306,26 @@ func TestWrap(t *testing.T) {
 			if !s.gatherFails && err != nil {
 				t.Fatal("gathering failed:", err)
 			}
-			if !reflect.DeepEqual(gotMF, wantMF) {
-				var want, got []string
+			if len(wantMF) != len(gotMF) {
+				t.Fatalf("Expected %d metricFamilies, got %d", len(wantMF), len(gotMF))
+			}
+			for i := range gotMF {
+				if !proto.Equal(gotMF[i], wantMF[i]) {
+					var want, got []string
 
-				for i, mf := range wantMF {
-					want = append(want, fmt.Sprintf("%3d: %s", i, mf))
-				}
-				for i, mf := range gotMF {
-					got = append(got, fmt.Sprintf("%3d: %s", i, mf))
-				}
+					for i, mf := range wantMF {
+						want = append(want, fmt.Sprintf("%3d: %s", i, mf))
+					}
+					for i, mf := range gotMF {
+						got = append(got, fmt.Sprintf("%3d: %s", i, mf))
+					}
 
-				t.Fatalf(
-					"unexpected output of gathering:\n\nWANT:\n%s\n\nGOT:\n%s\n",
-					strings.Join(want, "\n"),
-					strings.Join(got, "\n"),
-				)
+					t.Fatalf(
+						"unexpected output of gathering:\n\nWANT:\n%s\n\nGOT:\n%s\n",
+						strings.Join(want, "\n"),
+						strings.Join(got, "\n"),
+					)
+				}
 			}
 		})
 	}

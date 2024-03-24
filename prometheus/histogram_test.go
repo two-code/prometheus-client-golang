@@ -157,7 +157,7 @@ func TestHistogramConcurrency(t *testing.T) {
 		t.Skip("Skipping test in short mode.")
 	}
 
-	rand.Seed(42)
+	rand.New(rand.NewSource(42))
 
 	it := func(n uint32) bool {
 		mutations := int(n%1e4 + 1e4)
@@ -243,7 +243,7 @@ func TestHistogramVecConcurrency(t *testing.T) {
 		t.Skip("Skipping test in short mode.")
 	}
 
-	rand.Seed(42)
+	rand.New(rand.NewSource(42))
 
 	it := func(n uint32) bool {
 		mutations := int(n%1e4 + 1e4)
@@ -416,8 +416,8 @@ func TestHistogramExemplar(t *testing.T) {
 		Name:    "test",
 		Help:    "test help",
 		Buckets: []float64{1, 2, 3, 4},
+		now:     func() time.Time { return now },
 	}).(*histogram)
-	histogram.now = func() time.Time { return now }
 
 	ts := timestamppb.New(now)
 	if err := ts.CheckValid(); err != nil {
@@ -469,6 +469,8 @@ func TestHistogramExemplar(t *testing.T) {
 }
 
 func TestNativeHistogram(t *testing.T) {
+	now := time.Now()
+
 	scenarios := []struct {
 		name             string
 		observations     []float64 // With simulated interval of 1m.
@@ -477,25 +479,94 @@ func TestNativeHistogram(t *testing.T) {
 		maxBuckets       uint32
 		minResetDuration time.Duration
 		maxZeroThreshold float64
-		want             string // String representation of protobuf.
+		want             *dto.Histogram
 	}{
 		{
 			name:         "no sparse buckets",
 			observations: []float64{1, 2, 3},
 			factor:       1,
-			want:         `sample_count:3 sample_sum:6 bucket:<cumulative_count:0 upper_bound:0.005 > bucket:<cumulative_count:0 upper_bound:0.01 > bucket:<cumulative_count:0 upper_bound:0.025 > bucket:<cumulative_count:0 upper_bound:0.05 > bucket:<cumulative_count:0 upper_bound:0.1 > bucket:<cumulative_count:0 upper_bound:0.25 > bucket:<cumulative_count:0 upper_bound:0.5 > bucket:<cumulative_count:1 upper_bound:1 > bucket:<cumulative_count:2 upper_bound:2.5 > bucket:<cumulative_count:3 upper_bound:5 > bucket:<cumulative_count:3 upper_bound:10 > `, // Has conventional buckets because there are no sparse buckets.
+			want: &dto.Histogram{
+				SampleCount: proto.Uint64(3),
+				SampleSum:   proto.Float64(6),
+				Bucket: []*dto.Bucket{
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.005)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.01)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.025)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.05)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.1)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.25)},
+					{CumulativeCount: proto.Uint64(0), UpperBound: proto.Float64(0.5)},
+					{CumulativeCount: proto.Uint64(1), UpperBound: proto.Float64(1)},
+					{CumulativeCount: proto.Uint64(2), UpperBound: proto.Float64(2.5)},
+					{CumulativeCount: proto.Uint64(3), UpperBound: proto.Float64(5)},
+					{CumulativeCount: proto.Uint64(3), UpperBound: proto.Float64(10)},
+				},
+				CreatedTimestamp: timestamppb.New(now),
+			},
+		},
+		{
+			name:   "no observations",
+			factor: 1.1,
+			want: &dto.Histogram{
+				SampleCount:      proto.Uint64(0),
+				SampleSum:        proto.Float64(0),
+				Schema:           proto.Int32(3),
+				ZeroThreshold:    proto.Float64(2.938735877055719e-39),
+				ZeroCount:        proto.Uint64(0),
+				CreatedTimestamp: timestamppb.New(now),
+			},
+		},
+		{
+			name:          "no observations and zero threshold of zero resulting in no-op span",
+			factor:        1.1,
+			zeroThreshold: NativeHistogramZeroThresholdZero,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(0),
+				SampleSum:     proto.Float64(0),
+				Schema:        proto.Int32(3),
+				ZeroThreshold: proto.Float64(0),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(0)},
+				},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "factor 1.1 results in schema 3",
 			observations: []float64{0, 1, 2, 3},
 			factor:       1.1,
-			want:         `sample_count:4 sample_sum:6 schema:3 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:1 > positive_span:<offset:7 length:1 > positive_span:<offset:4 length:1 > positive_delta:1 positive_delta:0 positive_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(4),
+				SampleSum:     proto.Float64(6),
+				Schema:        proto.Int32(3),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(1)},
+					{Offset: proto.Int32(7), Length: proto.Uint32(1)},
+					{Offset: proto.Int32(4), Length: proto.Uint32(1)},
+				},
+				PositiveDelta:    []int64{1, 0, 0},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "factor 1.2 results in schema 2",
 			observations: []float64{0, 1, 1.2, 1.4, 1.8, 2},
 			factor:       1.2,
-			want:         `sample_count:6 sample_sum:7.4 schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(6),
+				SampleSum:     proto.Float64(7.4),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name: "factor 4 results in schema -1",
@@ -508,7 +579,18 @@ func TestNativeHistogram(t *testing.T) {
 				33.33, // Bucket 3: (16, 64]
 			},
 			factor: 4,
-			want:   `sample_count:14 sample_sum:63.2581251 schema:-1 zero_threshold:2.938735877055719e-39 zero_count:0 positive_span:<offset:-2 length:6 > positive_delta:2 positive_delta:0 positive_delta:0 positive_delta:2 positive_delta:-1 positive_delta:-2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(14),
+				SampleSum:     proto.Float64(63.2581251),
+				Schema:        proto.Int32(-1),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(-2), Length: proto.Uint32(6)},
+				},
+				PositiveDelta:    []int64{2, 0, 0, 2, -1, -2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name: "factor 17 results in schema -2",
@@ -519,58 +601,170 @@ func TestNativeHistogram(t *testing.T) {
 				33.33, // Bucket 2: (16, 256]
 			},
 			factor: 17,
-			want:   `sample_count:14 sample_sum:63.2581251 schema:-2 zero_threshold:2.938735877055719e-39 zero_count:0 positive_span:<offset:-1 length:4 > positive_delta:2 positive_delta:2 positive_delta:3 positive_delta:-6 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(14),
+				SampleSum:     proto.Float64(63.2581251),
+				Schema:        proto.Int32(-2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(-1), Length: proto.Uint32(4)},
+				},
+				PositiveDelta:    []int64{2, 2, 3, -6},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "negative buckets",
 			observations: []float64{0, -1, -1.2, -1.4, -1.8, -2},
 			factor:       1.2,
-			want:         `sample_count:6 sample_sum:-7.4 schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 negative_span:<offset:0 length:5 > negative_delta:1 negative_delta:-1 negative_delta:2 negative_delta:-2 negative_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(6),
+				SampleSum:     proto.Float64(-7.4),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				NegativeDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "negative and positive buckets",
 			observations: []float64{0, -1, -1.2, -1.4, -1.8, -2, 1, 1.2, 1.4, 1.8, 2},
 			factor:       1.2,
-			want:         `sample_count:11 sample_sum:0 schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 negative_span:<offset:0 length:5 > negative_delta:1 negative_delta:-1 negative_delta:2 negative_delta:-2 negative_delta:2 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(11),
+				SampleSum:     proto.Float64(0),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				NegativeDelta: []int64{1, -1, 2, -2, 2},
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:          "wide zero bucket",
 			observations:  []float64{0, -1, -1.2, -1.4, -1.8, -2, 1, 1.2, 1.4, 1.8, 2},
 			factor:        1.2,
 			zeroThreshold: 1.4,
-			want:          `sample_count:11 sample_sum:0 schema:2 zero_threshold:1.4 zero_count:7 negative_span:<offset:4 length:1 > negative_delta:2 positive_span:<offset:4 length:1 > positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(11),
+				SampleSum:     proto.Float64(0),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(1.4),
+				ZeroCount:     proto.Uint64(7),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(4), Length: proto.Uint32(1)},
+				},
+				NegativeDelta: []int64{2},
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(4), Length: proto.Uint32(1)},
+				},
+				PositiveDelta:    []int64{2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "NaN observation",
 			observations: []float64{0, 1, 1.2, 1.4, 1.8, 2, math.NaN()},
 			factor:       1.2,
-			want:         `sample_count:7 sample_sum:nan schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(7),
+				SampleSum:     proto.Float64(math.NaN()),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "+Inf observation",
 			observations: []float64{0, 1, 1.2, 1.4, 1.8, 2, math.Inf(+1)},
 			factor:       1.2,
-			want:         `sample_count:7 sample_sum:inf schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:5 > positive_span:<offset:4092 length:1 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 positive_delta:-1 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(7),
+				SampleSum:     proto.Float64(math.Inf(+1)),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+					{Offset: proto.Int32(4092), Length: proto.Uint32(1)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2, -1},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "-Inf observation",
 			observations: []float64{0, 1, 1.2, 1.4, 1.8, 2, math.Inf(-1)},
 			factor:       1.2,
-			want:         `sample_count:7 sample_sum:-inf schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 negative_span:<offset:4097 length:1 > negative_delta:1 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(7),
+				SampleSum:     proto.Float64(math.Inf(-1)),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(4097), Length: proto.Uint32(1)},
+				},
+				NegativeDelta: []int64{1},
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "limited buckets but nothing triggered",
 			observations: []float64{0, 1, 1.2, 1.4, 1.8, 2},
 			factor:       1.2,
 			maxBuckets:   4,
-			want:         `sample_count:6 sample_sum:7.4 schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:-1 positive_delta:2 positive_delta:-2 positive_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(6),
+				SampleSum:     proto.Float64(7.4),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "buckets limited by halving resolution",
 			observations: []float64{0, 1, 1.1, 1.2, 1.4, 1.8, 2, 3},
 			factor:       1.2,
 			maxBuckets:   4,
-			want:         `sample_count:8 sample_sum:11.5 schema:1 zero_threshold:2.938735877055719e-39 zero_count:1 positive_span:<offset:0 length:5 > positive_delta:1 positive_delta:2 positive_delta:-1 positive_delta:-2 positive_delta:1 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(8),
+				SampleSum:     proto.Float64(11.5),
+				Schema:        proto.Int32(1),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				PositiveDelta:    []int64{1, 2, -1, -2, 1},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by widening the zero bucket",
@@ -578,7 +772,18 @@ func TestNativeHistogram(t *testing.T) {
 			factor:           1.2,
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
-			want:             `sample_count:8 sample_sum:11.5 schema:2 zero_threshold:1 zero_count:2 positive_span:<offset:1 length:7 > positive_delta:1 positive_delta:1 positive_delta:-2 positive_delta:2 positive_delta:-2 positive_delta:0 positive_delta:1 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(8),
+				SampleSum:     proto.Float64(11.5),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(1),
+				ZeroCount:     proto.Uint64(2),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(1), Length: proto.Uint32(7)},
+				},
+				PositiveDelta:    []int64{1, 1, -2, 2, -2, 0, 1},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by widening the zero bucket twice",
@@ -586,7 +791,18 @@ func TestNativeHistogram(t *testing.T) {
 			factor:           1.2,
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
-			want:             `sample_count:9 sample_sum:15.5 schema:2 zero_threshold:1.189207115002721 zero_count:3 positive_span:<offset:2 length:7 > positive_delta:2 positive_delta:-2 positive_delta:2 positive_delta:-2 positive_delta:0 positive_delta:1 positive_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(9),
+				SampleSum:     proto.Float64(15.5),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(1.189207115002721),
+				ZeroCount:     proto.Uint64(3),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(2), Length: proto.Uint32(7)},
+				},
+				PositiveDelta:    []int64{2, -2, 2, -2, 0, 1, 0},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by reset",
@@ -595,21 +811,54 @@ func TestNativeHistogram(t *testing.T) {
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
 			minResetDuration: 5 * time.Minute,
-			want:             `sample_count:2 sample_sum:7 schema:2 zero_threshold:2.938735877055719e-39 zero_count:0 positive_span:<offset:7 length:2 > positive_delta:1 positive_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(2),
+				SampleSum:     proto.Float64(7),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(7), Length: proto.Uint32(2)},
+				},
+				PositiveDelta:    []int64{1, 0},
+				CreatedTimestamp: timestamppb.New(now.Add(8 * time.Minute)), // We expect reset to happen after 8 observations.
+			},
 		},
 		{
 			name:         "limited buckets but nothing triggered, negative observations",
 			observations: []float64{0, -1, -1.2, -1.4, -1.8, -2},
 			factor:       1.2,
 			maxBuckets:   4,
-			want:         `sample_count:6 sample_sum:-7.4 schema:2 zero_threshold:2.938735877055719e-39 zero_count:1 negative_span:<offset:0 length:5 > negative_delta:1 negative_delta:-1 negative_delta:2 negative_delta:-2 negative_delta:2 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(6),
+				SampleSum:     proto.Float64(-7.4),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				NegativeDelta:    []int64{1, -1, 2, -2, 2},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:         "buckets limited by halving resolution, negative observations",
 			observations: []float64{0, -1, -1.1, -1.2, -1.4, -1.8, -2, -3},
 			factor:       1.2,
 			maxBuckets:   4,
-			want:         `sample_count:8 sample_sum:-11.5 schema:1 zero_threshold:2.938735877055719e-39 zero_count:1 negative_span:<offset:0 length:5 > negative_delta:1 negative_delta:2 negative_delta:-1 negative_delta:-2 negative_delta:1 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(8),
+				SampleSum:     proto.Float64(-11.5),
+				Schema:        proto.Int32(1),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(1),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(0), Length: proto.Uint32(5)},
+				},
+				NegativeDelta:    []int64{1, 2, -1, -2, 1},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by widening the zero bucket, negative observations",
@@ -617,7 +866,18 @@ func TestNativeHistogram(t *testing.T) {
 			factor:           1.2,
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
-			want:             `sample_count:8 sample_sum:-11.5 schema:2 zero_threshold:1 zero_count:2 negative_span:<offset:1 length:7 > negative_delta:1 negative_delta:1 negative_delta:-2 negative_delta:2 negative_delta:-2 negative_delta:0 negative_delta:1 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(8),
+				SampleSum:     proto.Float64(-11.5),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(1),
+				ZeroCount:     proto.Uint64(2),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(1), Length: proto.Uint32(7)},
+				},
+				NegativeDelta:    []int64{1, 1, -2, 2, -2, 0, 1},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by widening the zero bucket twice, negative observations",
@@ -625,7 +885,18 @@ func TestNativeHistogram(t *testing.T) {
 			factor:           1.2,
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
-			want:             `sample_count:9 sample_sum:-15.5 schema:2 zero_threshold:1.189207115002721 zero_count:3 negative_span:<offset:2 length:7 > negative_delta:2 negative_delta:-2 negative_delta:2 negative_delta:-2 negative_delta:0 negative_delta:1 negative_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(9),
+				SampleSum:     proto.Float64(-15.5),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(1.189207115002721),
+				ZeroCount:     proto.Uint64(3),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(2), Length: proto.Uint32(7)},
+				},
+				NegativeDelta:    []int64{2, -2, 2, -2, 0, 1, 0},
+				CreatedTimestamp: timestamppb.New(now),
+			},
 		},
 		{
 			name:             "buckets limited by reset, negative observations",
@@ -634,7 +905,18 @@ func TestNativeHistogram(t *testing.T) {
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
 			minResetDuration: 5 * time.Minute,
-			want:             `sample_count:2 sample_sum:-7 schema:2 zero_threshold:2.938735877055719e-39 zero_count:0 negative_span:<offset:7 length:2 > negative_delta:1 negative_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(2),
+				SampleSum:     proto.Float64(-7),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				NegativeSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(7), Length: proto.Uint32(2)},
+				},
+				NegativeDelta:    []int64{1, 0},
+				CreatedTimestamp: timestamppb.New(now.Add(8 * time.Minute)), // We expect reset to happen after 8 observations.
+			},
 		},
 		{
 			name:             "buckets limited by halving resolution, then reset",
@@ -642,7 +924,18 @@ func TestNativeHistogram(t *testing.T) {
 			factor:           1.2,
 			maxBuckets:       4,
 			minResetDuration: 9 * time.Minute,
-			want:             `sample_count:2 sample_sum:7 schema:2 zero_threshold:2.938735877055719e-39 zero_count:0 positive_span:<offset:7 length:2 > positive_delta:1 positive_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(3),
+				SampleSum:     proto.Float64(12.1),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(7), Length: proto.Uint32(4)},
+				},
+				PositiveDelta:    []int64{1, 0, -1, 1},
+				CreatedTimestamp: timestamppb.New(now.Add(9 * time.Minute)), // We expect reset to happen after 8 minutes.
+			},
 		},
 		{
 			name:             "buckets limited by widening the zero bucket, then reset",
@@ -651,12 +944,29 @@ func TestNativeHistogram(t *testing.T) {
 			maxBuckets:       4,
 			maxZeroThreshold: 1.2,
 			minResetDuration: 9 * time.Minute,
-			want:             `sample_count:2 sample_sum:7 schema:2 zero_threshold:2.938735877055719e-39 zero_count:0 positive_span:<offset:7 length:2 > positive_delta:1 positive_delta:0 `,
+			want: &dto.Histogram{
+				SampleCount:   proto.Uint64(3),
+				SampleSum:     proto.Float64(12.1),
+				Schema:        proto.Int32(2),
+				ZeroThreshold: proto.Float64(2.938735877055719e-39),
+				ZeroCount:     proto.Uint64(0),
+				PositiveSpan: []*dto.BucketSpan{
+					{Offset: proto.Int32(7), Length: proto.Uint32(4)},
+				},
+				PositiveDelta:    []int64{1, 0, -1, 1},
+				CreatedTimestamp: timestamppb.New(now.Add(9 * time.Minute)), // We expect reset to happen after 8 minutes.
+			},
 		},
 	}
 
 	for _, s := range scenarios {
 		t.Run(s.name, func(t *testing.T) {
+			var (
+				ts         = now
+				funcToCall func()
+				whenToCall time.Duration
+			)
+
 			his := NewHistogram(HistogramOpts{
 				Name:                            "name",
 				Help:                            "help",
@@ -665,22 +975,30 @@ func TestNativeHistogram(t *testing.T) {
 				NativeHistogramMaxBucketNumber:  s.maxBuckets,
 				NativeHistogramMinResetDuration: s.minResetDuration,
 				NativeHistogramMaxZeroThreshold: s.maxZeroThreshold,
+				now:                             func() time.Time { return ts },
+				afterFunc: func(d time.Duration, f func()) *time.Timer {
+					funcToCall = f
+					whenToCall = d
+					return nil
+				},
 			})
-			ts := time.Now().Add(30 * time.Second)
-			now := func() time.Time {
-				return ts
-			}
-			his.(*histogram).now = now
+
+			ts = ts.Add(time.Minute)
 			for _, o := range s.observations {
 				his.Observe(o)
 				ts = ts.Add(time.Minute)
+				whenToCall -= time.Minute
+				if funcToCall != nil && whenToCall <= 0 {
+					funcToCall()
+					funcToCall = nil
+				}
 			}
 			m := &dto.Metric{}
 			if err := his.Write(m); err != nil {
 				t.Fatal("unexpected error writing metric", err)
 			}
-			got := m.Histogram.String()
-			if s.want != got {
+			got := m.Histogram
+			if !proto.Equal(s.want, got) {
 				t.Errorf("want histogram %q, got %q", s.want, got)
 			}
 		})
@@ -692,9 +1010,11 @@ func TestNativeHistogramConcurrency(t *testing.T) {
 		t.Skip("Skipping test in short mode.")
 	}
 
-	rand.Seed(42)
+	rand.New(rand.NewSource(42))
 
 	it := func(n uint32) bool {
+		ts := time.Now().Add(30 * time.Second).Unix()
+
 		mutations := int(n%1e4 + 1e4)
 		concLevel := int(n%5 + 1)
 		total := mutations * concLevel
@@ -711,13 +1031,10 @@ func TestNativeHistogramConcurrency(t *testing.T) {
 			NativeHistogramMaxBucketNumber:  50,
 			NativeHistogramMinResetDuration: time.Hour, // Comment out to test for totals below.
 			NativeHistogramMaxZeroThreshold: 0.001,
+			now: func() time.Time {
+				return time.Unix(atomic.LoadInt64(&ts), 0)
+			},
 		})
-
-		ts := time.Now().Add(30 * time.Second).Unix()
-		now := func() time.Time {
-			return time.Unix(atomic.LoadInt64(&ts), 0)
-		}
-		his.(*histogram).now = now
 
 		allVars := make([]float64, total)
 		var sampleSum float64
@@ -874,4 +1191,83 @@ func TestGetLe(t *testing.T) {
 			t.Errorf("%d. key %d, schema %d, want upper bound of %g, got %g", i, s.key, s.schema, s.want, got)
 		}
 	}
+}
+
+func TestHistogramCreatedTimestamp(t *testing.T) {
+	now := time.Now()
+
+	histogram := NewHistogram(HistogramOpts{
+		Name:    "test",
+		Help:    "test help",
+		Buckets: []float64{1, 2, 3, 4},
+		now:     func() time.Time { return now },
+	})
+
+	var metric dto.Metric
+	if err := histogram.Write(&metric); err != nil {
+		t.Fatal(err)
+	}
+
+	if metric.Histogram.CreatedTimestamp.AsTime().Unix() != now.Unix() {
+		t.Errorf("expected created timestamp %d, got %d", now.Unix(), metric.Histogram.CreatedTimestamp.AsTime().Unix())
+	}
+}
+
+func TestHistogramVecCreatedTimestamp(t *testing.T) {
+	now := time.Now()
+
+	histogramVec := NewHistogramVec(HistogramOpts{
+		Name:    "test",
+		Help:    "test help",
+		Buckets: []float64{1, 2, 3, 4},
+		now:     func() time.Time { return now },
+	}, []string{"label"})
+	histogram := histogramVec.WithLabelValues("value").(Histogram)
+
+	var metric dto.Metric
+	if err := histogram.Write(&metric); err != nil {
+		t.Fatal(err)
+	}
+
+	if metric.Histogram.CreatedTimestamp.AsTime().Unix() != now.Unix() {
+		t.Errorf("expected created timestamp %d, got %d", now.Unix(), metric.Histogram.CreatedTimestamp.AsTime().Unix())
+	}
+}
+
+func TestHistogramVecCreatedTimestampWithDeletes(t *testing.T) {
+	now := time.Now()
+
+	histogramVec := NewHistogramVec(HistogramOpts{
+		Name:    "test",
+		Help:    "test help",
+		Buckets: []float64{1, 2, 3, 4},
+		now:     func() time.Time { return now },
+	}, []string{"label"})
+
+	// First use of "With" should populate CT.
+	histogramVec.WithLabelValues("1")
+	expected := map[string]time.Time{"1": now}
+
+	now = now.Add(1 * time.Hour)
+	expectCTsForMetricVecValues(t, histogramVec.MetricVec, dto.MetricType_HISTOGRAM, expected)
+
+	// Two more labels at different times.
+	histogramVec.WithLabelValues("2")
+	expected["2"] = now
+
+	now = now.Add(1 * time.Hour)
+
+	histogramVec.WithLabelValues("3")
+	expected["3"] = now
+
+	now = now.Add(1 * time.Hour)
+	expectCTsForMetricVecValues(t, histogramVec.MetricVec, dto.MetricType_HISTOGRAM, expected)
+
+	// Recreate metric instance should reset created timestamp to now.
+	histogramVec.DeleteLabelValues("1")
+	histogramVec.WithLabelValues("1")
+	expected["1"] = now
+
+	now = now.Add(1 * time.Hour)
+	expectCTsForMetricVecValues(t, histogramVec.MetricVec, dto.MetricType_HISTOGRAM, expected)
 }
